@@ -111,14 +111,34 @@ function sanitize!(ctx, ex::Expr)::Expr
         sanitize!(ctx, ex.args[1])
         sanitize!(ctx, ex.args[2])
         return ex
-    elseif isexpr(ex, (:block, :call, :if, :elseif, :&&, :||, :curly, :tuple))
+    elseif isexpr(ex, (:block, :call, :if, :elseif, :&&, :||, :curly, :tuple, :vect))
         map!(
             a -> a isa Expr ? sanitize!(ctx, a) : a isa Symbol ? get_sym(ctx, a) : a,
             ex.args,
             ex.args,
         )
         return ex
-    elseif isexpr(ex, (:macrocall,  :., :$))
+    elseif isexpr(ex, :macrocall)
+        # TODO: Support DSL macros
+        map!(
+            a -> a isa Expr ? sanitize!(ctx, a) : a isa Symbol ? get_sym(ctx, a) : a,
+            ex.args,
+            ex.args,
+        )
+        return ex
+    elseif isexpr(ex, :.)
+        child_ex = ex
+        while isexpr(child_ex, :.) && child_ex.args[1] isa Expr
+            child_ex = child_ex.args[1]
+        end
+        if child_ex.args[1] isa Symbol
+            child_ex.args[1] = get_sym(ctx, child_ex.args[1])
+        else
+            error("Invalid selector $(child_ex.args[1])")
+        end
+        return ex
+        return ex
+    elseif isexpr(ex, :$)
         return ex
     else
         dump(ex)

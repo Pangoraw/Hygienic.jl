@@ -7,14 +7,6 @@ using InteractiveUtils
 # ╔═╡ d7d4b845-aa4a-4474-a37a-50802a45e6ce
 import Pkg
 
-# ╔═╡ 52448f61-0ef7-4ac9-909d-2ca3e2841851
-begin
-	# we use the pkg_str macro here to keep using the Pluto package manager.
-	Pkg.pkg"develop .."
-
-	using Hygienic
-end
-
 # ╔═╡ c93316ed-62b4-4183-a824-c45d2be09dff
 module MyModule
     using Hygienic
@@ -27,29 +19,101 @@ module MyModule
     end
 end
 
+# ╔═╡ af463c18-e808-4228-af5b-5ae4b49cac98
+read("../README.md", String) |> Markdown.parse
+
+# ╔═╡ ee64697c-fc22-466d-9249-43e720eb4fe0
+md"""
+## Pluto package manager tricks for this test notebook
+"""
+
 # ╔═╡ 0bd507f0-a183-11ec-2252-3fd74991bba4
 begin
 	import Pluto: ReactiveNode, ExpressionExplorer
 	import PlutoTest, Test
+	import PlutoLinks: @revise
 end
 
-# ╔═╡ fc13d96a-f7e1-488e-9501-ba775c1319aa
-macro identity(args...)
-	esc(last(args))
+# ╔═╡ 52448f61-0ef7-4ac9-909d-2ca3e2841851
+begin
+	# we use the pkg_str macro here to keep using the Pluto package manager.
+	Pkg.pkg"develop .."
+
+	@revise using Hygienic
 end
+
+# ╔═╡ edc472b6-be97-403b-95df-0e24b1f3b320
+md"""
+## A Simple testset implementation
+
+While waiting for [PlutoTest#17](https://github.com/JuliaPluto/PlutoTest.jl).
+"""
+
+# ╔═╡ 191512e4-c25f-4b35-b5ed-17943f5f0c54
+macro dummy_testset(name, block)
+	results = []
+	map!(block.args, block.args) do ex
+		if !Meta.isexpr(ex, :macrocall) || ex.args[1] != Symbol("@test")
+			return ex
+		end
+		new_name = gensym(:result)
+		push!(results, new_name)
+		Expr(:local, Expr(:(=), new_name, ex))
+	end
+	quote
+		$(esc(block))
+		TestSet($(esc(name)), $(esc(Expr(:vect, results...))))
+	end
+end
+
+# ╔═╡ 8c0869cd-a59c-4d92-99f7-c18a9752a002
+struct TestSet
+	name::String
+
+	results::Vector
+end
+
+# ╔═╡ c2833c1d-7c48-4dd1-97cd-fbb3457a34d6
+function Base.show(io::IO, m::MIME"text/html", ts::TestSet)
+	text = md"""
+	###### $(ts.name)
+	"""
+	show(io, m, text)
+	for result in ts.results
+		show(io, m, result)
+	end
+end
+
+# ╔═╡ f1e61118-d1ad-4c05-9c24-6b10102084f0
+md"""
+## Assign the macros depending on whether or not we are in Pluto or not
+
+The PlutoTest test checks for `isdefined(Main, :PlutoRunner)` which is the case in this test case because we are using Pluto inside the tests.
+"""
 
 # ╔═╡ 0be72453-abc1-46e5-aac4-c41cf99f731f
 is_pluto = startswith(string(nameof(@__MODULE__)), "workspace#")
 
 # ╔═╡ acbf4573-3f77-4a7a-8945-0403ee7daa2e
-var"@testset" = is_pluto ? var"@identity" : Test.var"@testset"
+var"@testset" = is_pluto ? var"@dummy_testset" : Test.var"@testset"
 
 # ╔═╡ ccbdb97b-bd12-4040-969b-c62c8169903c
 var"@test" = is_pluto ? 
 	PlutoTest.var"@test" : Test.var"@test"
 
+# ╔═╡ 3522296b-adaf-41a0-abe2-8256ab27115b
+@dummy_testset "A Test set" begin
+	@test 1 + 1 == 2
+    @test -cos(π) == 1.
+end
+
+# ╔═╡ 87d5721d-7909-464e-932d-b8beb105ca23
+md"""
+## The actual tests
+"""
+
 # ╔═╡ 8b1bd9e5-2783-4bdc-9976-3bf4355ab31f
-rnode = ReactiveNode ∘ ExpressionExplorer.try_compute_symbolreferences
+rnode = ReactiveNode ∘ ExpressionExplorer.try_compute_symbolreferences;
 
 # ╔═╡ 611b1029-7beb-48db-a888-239fe3b80e95
 @testset "Test 1" begin
@@ -115,28 +179,97 @@ let
 	x, y = ex.args[2].args[1].args
 	
    node = rnode(ex)
-   @testset "Simple expr" begin [
+   @testset "Simple expr" begin
 	   @test x ∈ node.definitions
 	   @test x ∉ node.references
 	   @test y ∈ node.definitions
 	   @test y ∉ node.references
-   ] end
+   end
 end
 
 # ╔═╡ 60198b32-c2c5-4d61-9aad-dffb58b8ed41
 let
-	ex = @hygienize quote 
+	local ex = @hygienize quote 
 		x = 1
 		x + y
 	end
 	x, y = ex.args[4].args[2:end]
 	node = rnode(ex)
 
-	@testset "Another simple expr" begin [
+	@testset "Another simple expr" begin
 		@test x ∈ node.definitions
 		@test :y ∈ node.references
 		@test y == :y
-	] end
+	end
+end
+
+# ╔═╡ 192ece6e-18f9-4538-a9ed-840f8c7a7fae
+md"""
+### Utils
+"""
+
+# ╔═╡ 40e5018b-cef4-4dbb-8d92-3b7b5fa6bac9
+"""
+	unsymify(s::Symbol)
+
+Turn a gensymed symbol into its unsymed counterpart.
+
+```julia
+unsymify(gensym(:x)) == :x
+```
+"""
+function unsymify(s::Symbol)
+	s = string(s)[3:end]
+	split(s, "#") |> first |> Symbol
+end
+
+# ╔═╡ 8a56cbc4-ba35-41a3-b25d-69b9595dbddb
+let
+	@testset "Macro Call" begin
+		local ex = @hygienize quote
+			state, set_state = blahblah()
+			@use_effect([state,]) do
+				set_state(y)
+			end
+			set_state(state)		
+		end
+
+		@test ex.args[2].args[1].args[1] |> unsymify == :state
+		@test ex.args[2].args[1].args[2] |> unsymify == :set_state
+		@test ex.args[end].args[1] |> unsymify == :set_state
+		@test ex.args[end].args[2] |> unsymify == :state
+	end
+end
+
+# ╔═╡ 33a54530-7219-44c2-8f8d-f1afe295517b
+@testset "Selector" begin
+	local ex = @hygienize quote
+		A = blahblah()
+
+		A.B.C
+		B.C.D
+	end
+
+	@test ex.args[end-2].args[1].args[1] |> unsymify == :A
+	@test ex.args[end].args[1].args[1] == :B
+end
+
+# ╔═╡ e033d308-070e-4114-8ad2-b3eb5a6929de
+@testset "Vect/Tuple" begin
+	local ex = @hygienize quote
+		x, y, z = 1:3
+
+		[x,y,z]
+		(x,y,z)
+	end
+
+	@test ex.args[4].args .|> unsymify == [:x, :y, :z]
+	@test ex.args[end].args .|> unsymify == [:x, :y, :z]
+end
+
+# ╔═╡ e967a1f8-9fe4-4c5f-94f8-bed03ca8046a
+@testset "Unsymify" begin
+	@test unsymify(gensym(:x)) == :x
 end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
@@ -145,12 +278,14 @@ PLUTO_PROJECT_TOML_CONTENTS = """
 Hygienic = "60a53d29-03fa-4035-8e80-3746437aa372"
 Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 Pluto = "c3e4b0f8-55cb-11ea-2926-15256bba5781"
+PlutoLinks = "0ff47ea0-7a50-410d-8455-4348d5de0420"
 PlutoTest = "cb4044da-4d16-4ffa-a6a3-8cad7f73ebdc"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
 Hygienic = "~0.0.1"
 Pluto = "~0.18.1"
+PlutoLinks = "~0.1.5"
 PlutoTest = "~0.2.2"
 """
 
@@ -169,6 +304,12 @@ uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
 
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
+
+[[deps.CodeTracking]]
+deps = ["InteractiveUtils", "UUIDs"]
+git-tree-sha1 = "759a12cefe1cd1bb49e477bc3702287521797483"
+uuid = "da1fd8a2-8d9e-5ec2-8556-3022fb5608a2"
+version = "1.0.7"
 
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
@@ -223,7 +364,6 @@ uuid = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 version = "0.9.17"
 
 [[deps.Hygienic]]
-deps = ["InteractiveUtils", "Markdown", "Pkg", "PlutoTest"]
 path = "../../home/paul/Projects/Hygienic.jl"
 uuid = "60a53d29-03fa-4035-8e80-3746437aa372"
 version = "0.0.1"
@@ -246,6 +386,12 @@ uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 git-tree-sha1 = "a3f24677c21f5bbe9d2a714f95dcd58337fb2856"
 uuid = "82899510-4779-5014-852e-03e436cf321d"
 version = "1.0.0"
+
+[[deps.JuliaInterpreter]]
+deps = ["CodeTracking", "InteractiveUtils", "Random", "UUIDs"]
+git-tree-sha1 = "007ab1efbda85da785caf1943d401a6e7556fc9a"
+uuid = "aa1ae85d-cabe-5617-a682-6adf51b2e16a"
+version = "0.9.9"
 
 [[deps.LibCURL]]
 deps = ["LibCURL_jll", "MozillaCACerts_jll"]
@@ -272,6 +418,12 @@ uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [[deps.Logging]]
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
+
+[[deps.LoweredCodeUtils]]
+deps = ["JuliaInterpreter"]
+git-tree-sha1 = "6b0440822974cab904c8b14d79743565140567f6"
+uuid = "6f1432cf-f94c-5a45-995e-cdbf5db27b0b"
+version = "2.2.1"
 
 [[deps.Markdown]]
 deps = ["Base64"]
@@ -318,6 +470,18 @@ git-tree-sha1 = "c97f4548e903d132342a6f5998554f507d0b2578"
 uuid = "c3e4b0f8-55cb-11ea-2926-15256bba5781"
 version = "0.18.1"
 
+[[deps.PlutoHooks]]
+deps = ["InteractiveUtils", "Markdown", "UUIDs"]
+git-tree-sha1 = "072cdf20c9b0507fdd977d7d246d90030609674b"
+uuid = "0ff47ea0-7a50-410d-8455-4348d5de0774"
+version = "0.0.5"
+
+[[deps.PlutoLinks]]
+deps = ["FileWatching", "InteractiveUtils", "Markdown", "PlutoHooks", "Revise", "UUIDs"]
+git-tree-sha1 = "0e8bcc235ec8367a8e9648d48325ff00e4b0a545"
+uuid = "0ff47ea0-7a50-410d-8455-4348d5de0420"
+version = "0.1.5"
+
 [[deps.PlutoTest]]
 deps = ["HypertextLiteral", "InteractiveUtils", "Markdown", "Test"]
 git-tree-sha1 = "17aa9b81106e661cffa1c4c36c17ee1c50a86eda"
@@ -341,6 +505,18 @@ deps = ["SHA", "Scratch"]
 git-tree-sha1 = "cdbd3b1338c72ce29d9584fdbe9e9b70eeb5adca"
 uuid = "05181044-ff0b-4ac5-8273-598c1e38db00"
 version = "0.1.3"
+
+[[deps.Requires]]
+deps = ["UUIDs"]
+git-tree-sha1 = "838a3a4188e2ded87a4f9f184b4b0d78a1e91cb7"
+uuid = "ae029012-a4dd-5104-9daa-d747884805df"
+version = "1.3.0"
+
+[[deps.Revise]]
+deps = ["CodeTracking", "Distributed", "FileWatching", "JuliaInterpreter", "LibGit2", "LoweredCodeUtils", "OrderedCollections", "Pkg", "REPL", "Requires", "UUIDs", "Unicode"]
+git-tree-sha1 = "4d4239e93531ac3e7ca7e339f15978d0b5149d03"
+uuid = "295af30f-e4ad-537b-8983-00126c2a3abe"
+version = "3.3.3"
 
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
@@ -411,23 +587,37 @@ uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 """
 
 # ╔═╡ Cell order:
+# ╟─af463c18-e808-4228-af5b-5ae4b49cac98
+# ╟─ee64697c-fc22-466d-9249-43e720eb4fe0
 # ╠═d7d4b845-aa4a-4474-a37a-50802a45e6ce
 # ╠═0bd507f0-a183-11ec-2252-3fd74991bba4
-# ╠═fc13d96a-f7e1-488e-9501-ba775c1319aa
+# ╠═52448f61-0ef7-4ac9-909d-2ca3e2841851
+# ╟─edc472b6-be97-403b-95df-0e24b1f3b320
+# ╠═191512e4-c25f-4b35-b5ed-17943f5f0c54
+# ╟─3522296b-adaf-41a0-abe2-8256ab27115b
+# ╠═8c0869cd-a59c-4d92-99f7-c18a9752a002
+# ╠═c2833c1d-7c48-4dd1-97cd-fbb3457a34d6
+# ╟─f1e61118-d1ad-4c05-9c24-6b10102084f0
 # ╠═0be72453-abc1-46e5-aac4-c41cf99f731f
 # ╠═acbf4573-3f77-4a7a-8945-0403ee7daa2e
 # ╠═ccbdb97b-bd12-4040-969b-c62c8169903c
-# ╠═52448f61-0ef7-4ac9-909d-2ca3e2841851
+# ╟─87d5721d-7909-464e-932d-b8beb105ca23
 # ╠═8b1bd9e5-2783-4bdc-9976-3bf4355ab31f
 # ╟─611b1029-7beb-48db-a888-239fe3b80e95
 # ╟─115ccb93-5a61-420c-b88d-2c1261b4eb85
 # ╟─bebf115e-fa32-4bc0-84c6-a1244c606b27
 # ╠═5d9caed8-1860-4c58-a09d-1191ae8374f7
 # ╠═58e3db66-d015-4adf-a36e-cee2852c90c3
-# ╠═38fcaa73-8644-4eb0-ada6-6148dd0144f5
+# ╟─38fcaa73-8644-4eb0-ada6-6148dd0144f5
 # ╠═c93316ed-62b4-4183-a824-c45d2be09dff
-# ╠═53496afd-2e53-451a-a2f2-65b2c956dfdb
-# ╠═95c9aaef-4e46-405e-9fef-ee1507c35dff
-# ╠═60198b32-c2c5-4d61-9aad-dffb58b8ed41
+# ╟─53496afd-2e53-451a-a2f2-65b2c956dfdb
+# ╟─95c9aaef-4e46-405e-9fef-ee1507c35dff
+# ╟─60198b32-c2c5-4d61-9aad-dffb58b8ed41
+# ╟─8a56cbc4-ba35-41a3-b25d-69b9595dbddb
+# ╟─33a54530-7219-44c2-8f8d-f1afe295517b
+# ╟─e033d308-070e-4114-8ad2-b3eb5a6929de
+# ╟─192ece6e-18f9-4538-a9ed-840f8c7a7fae
+# ╟─40e5018b-cef4-4dbb-8d92-3b7b5fa6bac9
+# ╟─e967a1f8-9fe4-4c5f-94f8-bed03ca8046a
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
